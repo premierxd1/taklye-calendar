@@ -1,5 +1,8 @@
-discord.py
-google-api-python-client
-google-auth
-python-dotenv
-Flask
+discord.py==2.3.2
+google-api-python-client==2.127.0
+google-auth==2.29.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.0
+python-dateutil==2.9.0
+aiohttp==3.9.5
+Flask==3.0.3
