@@ -208,6 +208,7 @@ async def on_ready():
     try:
         await clean_old_calendar_messages()
         await send_monthly_calendar()
+        check_calendar.start()
     except Exception as e:
         print(f"[ERROR-on_ready] {e}")
 
