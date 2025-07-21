@@ -11,6 +11,7 @@ import re
 from dateutil.parser import isoparse
 from aiohttp import web
 import threading
+import unicodedata
 
 
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -58,7 +59,7 @@ def save_notified(data):
         json.dump(list(data), f)
 
 def get_upcoming_events():
-    now = datetime.utcnow().isoformat() + 'Z'
+    now = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
     events_result = calendar_service.events().list(
         calendarId=CALENDAR_ID, timeMin=now,
         maxResults=10, singleEvents=True,
@@ -121,96 +122,18 @@ async def checkin_members(title, date_str, voice_channel_id, text_channel):
         print(f"[ERROR-checkin_members] {e}")
         return await text_channel.send("⚠️ เกิดข้อผิดพลาดในการเช็คชื่อ")
 
-@bot.event
-async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
-    check_calendar.start()
-    monthly_summary_notifier.start()
-    # Start the web server
-    await create_web_server()
-
-@tasks.loop(seconds=30)
-async def check_calendar():
-    now = datetime.now(timezone.utc)
-    events = get_upcoming_events()
-
-    for event in events:
-        title = event.get('summary', 'ไม่ระบุชื่อกิจกรรม')
-        event_id = event.get('id', 'unknown')
-        start_time = event['start'].get('dateTime')
-        start = isoparse(start_time) if start_time else isoparse(event['start']['date'] + 'T00:00:00+00:00')
-        delta = start - now
-
-        def notify_once(type_name, condition, message):
-            noti_key = f"{event_id}|{type_name}"
-            if condition and noti_key not in already_notified:
-                already_notified.add(noti_key)
-                save_notified(already_notified)
-                return message
-            return None
-
-        th_time = start.astimezone(timezone(timedelta(hours=7)))
-        time_24 = th_time.strftime('%H:%M')
-        time_12 = th_time.strftime('%I:%M %p')
-
-        messages = [
-            notify_once("today", th_time.date() == now.astimezone(timezone(timedelta(hours=7))).date(),
-                f"📣 <@&{ROLE_ID}>\n# วันนี้เรามี `{title}` เวลา {time_24} น. ({time_12}) "),
-            notify_once("1d", timedelta(hours=23, minutes=59) <= delta <= timedelta(hours=24, minutes=1),
-                f"📆 <@&{ROLE_ID}>\n# **พรุ่งนี้** เรามี `{title}` เวลา {time_24} น. ({time_12})"),
-            notify_once("1h", timedelta(minutes=59) <= delta <= timedelta(minutes=61),
-                f"⏰ <@&{ROLE_ID}>\n# อีก **1 ชั่วโมง** จะถึงเวลา `{title}` เวลา {time_24} น. ({time_12})"),
-            notify_once("10m", timedelta(minutes=9, seconds=30) <= delta <= timedelta(minutes=10, seconds=30),
-                f"⚠️ <@&{ROLE_ID}>\n# `{title}` เวลา {time_24} น. ({time_12}) จะเริ่มในอีก **10 นาที** เตรียมตัวให้พร้อม!"),
-            notify_once("start", timedelta(seconds=-60) < delta < timedelta(seconds=60),
-                f"🚀 <@&{ROLE_ID}>\n# ถึงเวลาเริ่ม `{title}` เวลา {time_24} น. ({time_12}) แล้วใครยังไม่มาถ่ายตูดมาให้กูเดี๋ยวนี้!")
-        ]
-        
-        voice_channel_id = load_voice_id().get(str(channel.guild.id))
-        await checkin_members(title, th_time.strftime('%d/%m/%Y'), voice_channel_id, channel)
-
-        delete_times = [86400, 3600, 600, 300, 300]  # 1d, 1h, 10m, start
-        for msg, delete_after in zip(messages, delete_times):
-            if msg:
-                for cid in channel_ids:
-                    channel = bot.get_channel(cid)
-                    if channel:
-                        sent = await channel.send(msg)
-                        asyncio.create_task(delete_later(sent, delete_after))
-                asyncio.create_task(delete_later(sent, delete_after))
-
-
-@tasks.loop(minutes=1)
-async def monthly_summary_notifier():
-    now = datetime.now(timezone(timedelta(hours=7)))
-    if now.day == 1 and now.hour == 0 and now.minute == 0:
-        channel = bot.get_channel(CHANNEL_ID)
-        if not channel:
-            return
-        month_str = now.strftime("%m/%Y")
-        response = await show_month_events_internal(month_str)
-        if response:
-            bot_msg = await channel.send(response)
-            await asyncio.sleep(60)
-            await bot_msg.delete()
-            async for msg in channel.history(limit=10, before=bot_msg.created_at):
-                if msg.author != bot.user:
-                    try:
-                        await msg.delete()
-                        break
-                    except:
-                        pass
-
-async def show_month_events_internal(arg=None):
+async def show_month_events_internal(arg: str = None, *, year: int = None, month: int = None):
     try:
-        if arg:
+        if isinstance(arg, str) and arg.strip():
             match = re.match(r"(\d{2})/(\d{4})", arg.strip())
             if not match:
                 return None
             month, year = map(int, match.groups())
+        elif year is not None and month is not None:
+            pass  # ใช้ year และ month จาก argument
         else:
             now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=7)))
-            month, year = now.month, now.year
+            year, month = now.year, now.month
 
         month_names_th = [
             "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
@@ -244,9 +167,148 @@ async def show_month_events_internal(arg=None):
             response += f"- {title} → {date_str} | {time_24} น. | {time_12}\n"
 
         return response
+
     except Exception as e:
         print(f"[ERROR-show_month_events_internal] {e}")
         return "❌ เกิดข้อผิดพลาดในการสร้างตารางอัตโนมัติ"
+
+
+
+async def clean_old_calendar_messages():
+    for cid in channel_ids:
+        channel = bot.get_channel(cid)
+        if channel:
+            try:
+                async for message in channel.history(limit=100):
+                    if message.author == bot.user and "📅 ตารางซ้อม/แข่งเดือน" in message.content:
+                        await message.delete()
+                        print(f"🧹 ลบข้อความตารางเก่าใน {channel.name}")
+            except Exception as e:
+                print(f"[ERROR-ลบข้อความเก่า] {e}")
+
+async def send_monthly_calendar():
+    now = datetime.now(timezone(timedelta(hours=7)))
+    year = now.year
+    month = now.month
+    calendar_text = await show_month_events_internal(arg=f"{month:02d}/{year}")
+
+    if calendar_text:
+        for cid in channel_ids:
+            channel = bot.get_channel(cid)
+            if channel:
+                await channel.send(calendar_text)
+
+
+
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    print("📡 Bot is now online.")
+
+    try:
+        await clean_old_calendar_messages()
+        await send_monthly_calendar()
+    except Exception as e:
+        print(f"[ERROR-on_ready] {e}")
+
+
+@tasks.loop(seconds=30)
+async def check_calendar():
+    now = datetime.now(timezone.utc)
+    print(f"[{now.isoformat()}] 🔄 Checking events...")
+    events = get_upcoming_events()
+
+    for event in events:
+        title = event.get('summary', 'ไม่ระบุชื่อกิจกรรม')
+        event_id = event.get('id', 'unknown')
+        is_all_day = 'date' in event['start']
+
+        # ✅ แปลงเวลา
+        if is_all_day:
+            start = isoparse(event['start']['date'] + 'T00:00:00+00:00')
+        else:
+            start = isoparse(event['start']['dateTime'])
+
+        delta = start - now
+        th_time = start.astimezone(timezone(timedelta(hours=7)))
+        time_24 = th_time.strftime('%H:%M') if not is_all_day else "ทั้งวัน"
+        time_12 = th_time.strftime('%I:%M %p') if not is_all_day else ""
+
+        print(f"🔍 Event: {title} | All-day: {is_all_day} | เวลาไทย: {time_24} | เหลืออีก {delta}")
+
+        def notify_once(type_name, condition, message):
+            noti_key = f"{event_id}|{type_name}"
+            if condition and noti_key not in already_notified:
+                already_notified.add(noti_key)
+                save_notified(already_notified)
+                print(f"✅ Triggered: {type_name}")
+                return message
+            return None
+
+        messages = []
+
+        if is_all_day:
+            messages.append(notify_once("1d", timedelta(hours=23) <= delta <= timedelta(hours=25),
+                f"📆 <@&{ROLE_ID}>\n# **พรุ่งนี้** เรามีกิจกรรมทั้งวัน: `{title}`"))
+            messages.append(notify_once("today", th_time.date() == now.astimezone(timezone(timedelta(hours=7))).date(),
+                f"📣 <@&{ROLE_ID}>\n# วันนี้มีกิจกรรมทั้งวัน: `{title}`"))
+        else:
+            messages.extend([
+                notify_once("1d", timedelta(hours=23, minutes=59) <= delta <= timedelta(hours=24, minutes=1),
+                    f"📆 <@&{ROLE_ID}>\n# **พรุ่งนี้** เรามี `{title}` เวลา {time_24} น. ({time_12})"),
+                notify_once("today", th_time.date() == now.astimezone(timezone(timedelta(hours=7))).date(),
+                    f"📣 <@&{ROLE_ID}>\n# วันนี้เรามี `{title}` เวลา {time_24} น. ({time_12}) "),
+                notify_once("1h", timedelta(minutes=59) <= delta <= timedelta(minutes=61),
+                    f"⏰ <@&{ROLE_ID}>\n# อีก **1 ชั่วโมง** จะถึงเวลา `{title}` เวลา {time_24} น. ({time_12})"),
+                notify_once("10m", timedelta(minutes=9, seconds=30) <= delta <= timedelta(minutes=10, seconds=30),
+                    f"⚠️ <@&{ROLE_ID}>\n# `{title}` เวลา {time_24} น. ({time_12}) จะเริ่มในอีก **10 นาที** เตรียมตัวให้พร้อม!"),
+                notify_once("start", timedelta(seconds=-60) < delta < timedelta(seconds=60),
+                    f"🚀 <@&{ROLE_ID}>\n# ถึงเวลาเริ่ม `{title}` เวลา {time_24} น. ({time_12}) แล้วใครยังไม่มาถ่ายตูดมาให้กูเดี๋ยวนี้!")
+            ])
+
+        delete_times = [86400, 86400, 3600, 600, 300, 300]  # สำหรับ 6 ประเภท
+        for msg, delete_after in zip(messages, delete_times):
+            if msg:
+                for cid in channel_ids:
+                    channel = bot.get_channel(cid)
+                    if channel:
+                        try:
+                            sent = await channel.send(msg)
+                            print(f"📤 ส่งข้อความไปยัง {channel.name}")
+                            asyncio.create_task(delete_later(sent, delete_after))
+                        except Exception as e:
+                            print(f"[ERROR-ส่งข้อความ] {e}")
+
+        if not is_all_day and timedelta(seconds=-60) < delta < timedelta(seconds=60):
+            for cid in channel_ids:
+                channel = bot.get_channel(cid)
+                if channel:
+                    voice_channel_id = load_voice_id().get(str(channel.guild.id))
+                    await checkin_members(title, th_time.strftime('%d/%m/%Y'), voice_channel_id, channel)
+
+
+
+
+@tasks.loop(minutes=1)
+async def monthly_summary_notifier():
+    now = datetime.now(timezone(timedelta(hours=7)))
+    if now.day == 1 and now.hour == 0 and now.minute == 0:
+        channel = bot.get_channel(CHANNEL_ID)
+        if not channel:
+            return
+        month_str = now.strftime("%m/%Y")
+        response = await show_month_events_internal(month_str)
+        if response:
+            bot_msg = await channel.send(response)
+            await asyncio.sleep(60)
+            await bot_msg.delete()
+            async for msg in channel.history(limit=10, before=bot_msg.created_at):
+                if msg.author != bot.user:
+                    try:
+                        await msg.delete()
+                        break
+                    except:
+                        pass
 
 @bot.command(name="today")
 async def show_month_events(ctx, *, arg=None):
@@ -369,7 +431,15 @@ async def edit_event(ctx, *, args):
                 continue
 
             ev_start = isoparse(ev_start_str)
-            if ev_title == title and abs((ev_start - old_utc).total_seconds()) < 60:
+            norm_ev_title = unicodedata.normalize("NFC", ev_title)
+            norm_title = unicodedata.normalize("NFC", title)
+
+            norm_ev_title = unicodedata.normalize("NFC", ev_title)
+            norm_title = unicodedata.normalize("NFC", title)
+
+            if norm_ev_title == norm_title and abs((ev_start - target_utc).total_seconds()) < 60:
+
+
                 # ใช้เวลาเดิม ถ้าไม่มีข้อมูลใหม่
                 new_date = datetime.strptime(new_date_str, "%d/%m/%Y").date() if new_date_str else old_date
                 new_time = datetime.strptime(new_time_str, "%H:%M").time() if new_time_str else old_time
