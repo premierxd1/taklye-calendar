@@ -346,9 +346,16 @@ async def this_month_schedule(ctx):
         await ctx.send("❌ เกิดข้อผิดพลาดในการแสดงตารางเดือนนี้")
         print(f"[ERROR-เดือนนี้] {e}")
 
+@bot.command(name="เทส")
+async def test_bot(ctx):
+    user_msg = ctx.message
+    bot_reply = await ctx.send("✅ บอททำงานปกติ!")
+
+    await asyncio.sleep(300)  # 5 นาที (300 วินาที)
+
 from keep_alive import keep_alive
 
-keep_alive()  # ✅ เรียกก่อน เพื่อให้ web server ทำงานก่อนบอท
+keep_alive()
 
 async def main():
     async with bot:
