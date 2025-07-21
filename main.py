@@ -20,6 +20,13 @@ NOTIFIED_FILE = "notified.json"
 ROLE_ID = 1361252742521290866
 VOICE_ID_FILE = "voice_id.json"
 
+SCOPES = ['https://www.googleapis.com/auth/calendar']
+creds_json = os.getenv("GOOGLE_CREDS")
+creds_dict = json.loads(creds_json)
+creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+
+calendar_service = build('calendar', 'v3', credentials=creds)
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True  
@@ -49,10 +56,6 @@ already_notified = load_notified()
 def save_notified(data):
     with open(NOTIFIED_FILE, "w") as f:
         json.dump(list(data), f)
-
-SCOPES = ['https://www.googleapis.com/auth/calendar']
-creds = service_account.Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
-calendar_service = build('calendar', 'v3', credentials=creds)
 
 def get_upcoming_events():
     now = datetime.utcnow().isoformat() + 'Z'
