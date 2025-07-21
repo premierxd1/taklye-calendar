@@ -15,9 +15,28 @@ import threading
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 CALENDAR_ID = os.getenv("CALENDAR_ID")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+CHANNELS_FILE = "channels.json"
 NOTIFIED_FILE = "notified.json"
 ROLE_ID = 1361252742521290866
+VOICE_ID_FILE = "voice_id.json"
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.voice_states = True  
+intents.members = True
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+def load_channels():
+    if Path(CHANNELS_FILE).exists():
+        with open(CHANNELS_FILE, "r") as f:
+            return json.load(f).get("channel_ids", [])
+    return []
+
+def save_channels(channel_ids):
+    with open(CHANNELS_FILE, "w") as f:
+        json.dump({"channel_ids": channel_ids}, f)
+
+channel_ids = load_channels()
 
 def load_notified():
     if Path(NOTIFIED_FILE).exists():
@@ -30,10 +49,6 @@ already_notified = load_notified()
 def save_notified(data):
     with open(NOTIFIED_FILE, "w") as f:
         json.dump(list(data), f)
-
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 creds = service_account.Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
@@ -62,6 +77,47 @@ async def create_web_server():
     await site.start()
     print("✅ Web server started on port 8080")
 
+async def delete_later(message, delay):
+    await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except:
+        pass
+
+def save_voice_id(data):
+    with open(VOICE_ID_FILE, "w") as f:
+        json.dump(data, f)
+
+def load_voice_id():
+    if Path(VOICE_ID_FILE).exists():
+        with open(VOICE_ID_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+async def checkin_members(title, date_str, voice_channel_id, text_channel):
+    try:
+        role = discord.utils.get(text_channel.guild.roles, id=ROLE_ID)
+        voice_channel = text_channel.guild.get_channel(voice_channel_id)
+
+        if not voice_channel:
+            return await text_channel.send("❌ ไม่พบห้องพูดคุยที่ตั้งไว้ กรุณาตรวจสอบ `!setvoice`")
+
+        members_in_voice = [member for member in voice_channel.members]
+        all_members = [member for member in text_channel.guild.members if role in member.roles]
+
+        lines = []
+        for member in all_members:
+            symbol = "✅" if member in members_in_voice else "❌"
+            lines.append(f"- {member.display_name} {symbol}")
+
+        names = "\n".join(lines) if lines else "ไม่มีใครอยู่ในห้อง"
+        message = f"📝 `{title}` {date_str} เช็คชื่อ:\n{names}"
+        return await text_channel.send(message)
+
+    except Exception as e:
+        print(f"[ERROR-checkin_members] {e}")
+        return await text_channel.send("⚠️ เกิดข้อผิดพลาดในการเช็คชื่อ")
+
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
@@ -73,7 +129,6 @@ async def on_ready():
 @tasks.loop(seconds=30)
 async def check_calendar():
     now = datetime.now(timezone.utc)
-    channel = bot.get_channel(CHANNEL_ID)
     events = get_upcoming_events()
 
     for event in events:
@@ -96,7 +151,7 @@ async def check_calendar():
         time_12 = th_time.strftime('%I:%M %p')
 
         messages = [
-            notify_once("today", start.astimezone(timezone(timedelta(hours=7))).date() == now.astimezone(timezone(timedelta(hours=7))).date(),
+            notify_once("today", th_time.date() == now.astimezone(timezone(timedelta(hours=7))).date(),
                 f"📣 <@&{ROLE_ID}>\n# วันนี้เรามี `{title}` เวลา {time_24} น. ({time_12}) "),
             notify_once("1d", timedelta(hours=23, minutes=59) <= delta <= timedelta(hours=24, minutes=1),
                 f"📆 <@&{ROLE_ID}>\n# **พรุ่งนี้** เรามี `{title}` เวลา {time_24} น. ({time_12})"),
@@ -107,15 +162,20 @@ async def check_calendar():
             notify_once("start", timedelta(seconds=-60) < delta < timedelta(seconds=60),
                 f"🚀 <@&{ROLE_ID}>\n# ถึงเวลาเริ่ม `{title}` เวลา {time_24} น. ({time_12}) แล้วใครยังไม่มาถ่ายตูดมาให้กูเดี๋ยวนี้!")
         ]
+        
+        voice_channel_id = load_voice_id().get(str(channel.guild.id))
+        await checkin_members(title, th_time.strftime('%d/%m/%Y'), voice_channel_id, channel)
 
-        for msg in messages:
+        delete_times = [86400, 3600, 600, 300, 300]  # 1d, 1h, 10m, start
+        for msg, delete_after in zip(messages, delete_times):
             if msg:
-                sent = await channel.send(msg)
-                await asyncio.sleep(60)
-                try:
-                    await sent.delete()
-                except:
-                    pass
+                for cid in channel_ids:
+                    channel = bot.get_channel(cid)
+                    if channel:
+                        sent = await channel.send(msg)
+                        asyncio.create_task(delete_later(sent, delete_after))
+                asyncio.create_task(delete_later(sent, delete_after))
+
 
 @tasks.loop(minutes=1)
 async def monthly_summary_notifier():
@@ -185,7 +245,7 @@ async def show_month_events_internal(arg=None):
         print(f"[ERROR-show_month_events_internal] {e}")
         return "❌ เกิดข้อผิดพลาดในการสร้างตารางอัตโนมัติ"
 
-@bot.command(name="ตาราง")
+@bot.command(name="today")
 async def show_month_events(ctx, *, arg=None):
     response = await show_month_events_internal(arg)
     if response:
@@ -197,7 +257,7 @@ async def show_month_events(ctx, *, arg=None):
         except:
             pass
 
-@bot.command(name="เพิ่ม")
+@bot.command(name="addtask")
 async def add_event(ctx, *, args):
     try:
         match = re.match(r"(.+)\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})", args)
@@ -230,7 +290,7 @@ async def add_event(ctx, *, args):
         print(f"[ERROR-เพิ่ม] {e}")
 
 
-@bot.command(name="ลบ")
+@bot.command(name="deltask")
 async def delete_event(ctx, *, args):
     try:
         match = re.match(r"(.+)\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})", args)
@@ -274,7 +334,7 @@ async def delete_event(ctx, *, args):
         print(f"[ERROR-ลบ] {e}")
 
 
-@bot.command(name="แก้ไข")
+@bot.command(name="etask")
 async def edit_event(ctx, *, args):
     try:
         match = re.match(r"(.+?)\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})(?:\s+(\d{2}/\d{2}/\d{4}))?(?:\s+(\d{2}:\d{2}))?", args)
@@ -326,7 +386,7 @@ async def edit_event(ctx, *, args):
         await ctx.send("❌ เกิดข้อผิดพลาดในการแก้ไขกิจกรรม")
         print(f"[ERROR-แก้ไข] {e}")
 
-@bot.command(name="เดือนนี้")
+@bot.command(name="seetask")
 async def this_month_schedule(ctx):
     try:
         # ดึงเดือนและปีปัจจุบัน (เวลาไทย)
@@ -346,16 +406,81 @@ async def this_month_schedule(ctx):
         await ctx.send("❌ เกิดข้อผิดพลาดในการแสดงตารางเดือนนี้")
         print(f"[ERROR-เดือนนี้] {e}")
 
-@bot.command(name="เทส")
-async def test_bot(ctx):
-    user_msg = ctx.message
-    bot_reply = await ctx.send("ควยไรเทสหาแม่🫰🏽")
+@bot.command(name="add")
+async def add_channel(ctx):
+    channel_id = ctx.channel.id
+    if channel_id not in channel_ids:
+        channel_ids.append(channel_id)
+        save_channels(channel_ids)
+        await ctx.send(f"✅ เพิ่มช่องนี้ในรายการส่งข้อความอัตโนมัติแล้ว")
+    else:
+        await ctx.send("⚠️ ช่องนี้มีอยู่แล้วในรายการ")
 
-    await asyncio.sleep(300)  # 5 นาที (300 วินาที)
+@bot.command(name="remove")
+async def remove_channel(ctx):
+    channel_id = ctx.channel.id
+    if channel_id in channel_ids:
+        channel_ids.remove(channel_id)
+        save_channels(channel_ids)
+        await ctx.send("🗑️ ลบช่องนี้ออกจากรายการสำเร็จแล้ว")
+    else:
+        await ctx.send("⚠️ ช่องนี้ยังไม่ถูกเพิ่มไว้")
+
+@bot.command(name="setvoice")
+async def set_voice_channel(ctx):
+    print("⚙️ setvoice เริ่มทำงานแล้ว")
+    if ctx.author.voice and ctx.author.voice.channel:
+        voice_channel_id = ctx.author.voice.channel.id
+        guild_id = str(ctx.guild.id)
+
+        settings = load_voice_id()
+        settings[guild_id] = voice_channel_id
+        save_voice_id(settings)
+
+        bot_msg = await ctx.send(f"✅ ตั้งค่าห้องพูดคุยสำเร็จ: {ctx.author.voice.channel.name}")
+    else:
+        bot_msg = await ctx.send("⚠️ กรุณาเข้าห้องพูดคุยก่อนพิมพ์คำสั่งนี้")
+
+    await asyncio.sleep(15)
+    try:
+        await bot_msg.delete()
+        await asyncio.sleep(5)
+        await ctx.message.delete()
+    except:
+        pass
+
+
+@bot.command(name="check")    
+async def test_checkin(ctx):
+    settings = load_voice_id()
+    voice_channel_id = settings.get(str(ctx.guild.id), 0)
+
+    loading_msg = await ctx.send("📋 กำลังเช็คชื่อ...")
+    await asyncio.sleep(2)
+    await loading_msg.delete()
+
+    # รอรับข้อความจากฟังก์ชันเช็คชื่อ
+    check_msg = await checkin_members(
+        "ทดสอบเช็คชื่อ",
+        datetime.now().strftime("%d/%m/%Y"),
+        voice_channel_id,
+        ctx.channel
+    )
+
+    await asyncio.sleep(10)
+    try:
+        await ctx.message.delete()
+        await asyncio.sleep(5)
+        await check_msg.delete()
+    except:
+        pass
+
+
+
 
 from keep_alive import keep_alive
 
-keep_alive()
+keep_alive()  # ✅ เรียกก่อน เพื่อให้ web server ทำงานก่อนบอท
 
 async def main():
     async with bot:
