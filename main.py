@@ -199,12 +199,6 @@ async def send_monthly_calendar():
             if channel:
                 await channel.send(calendar_text)
 
-@tasks.loop(hours=24)
-async def restart_bot_every_24h():
-    print("🔁 รีสตาร์ทบอทเพื่อความเสถียร")
-    await asyncio.sleep(2)  # รอให้ print เสร็จก่อน
-    os.execv(sys.executable, ['python'] + sys.argv)
-
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
@@ -217,6 +211,12 @@ async def on_ready():
         restart_bot_every_24h.start()
     except Exception as e:
         print(f"[ERROR-on_ready] {e}")
+
+@tasks.loop(hours=24)
+async def restart_bot_every_24h():
+    print("🔁 รีสตาร์ทบอทเพื่อความเสถียร")
+    await asyncio.sleep(2)  # รอให้ print เสร็จก่อน
+    os.execv(sys.executable, ['python'] + sys.argv)
 
 
 @tasks.loop(seconds=30)
