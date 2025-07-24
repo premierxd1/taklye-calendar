@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import os
+import sys
 import re
 from dateutil.parser import isoparse
 from aiohttp import web
@@ -198,7 +199,11 @@ async def send_monthly_calendar():
             if channel:
                 await channel.send(calendar_text)
 
-
+@tasks.loop(hours=24)
+async def restart_bot_every_24h():
+    print("🔁 รีสตาร์ทบอทเพื่อความเสถียร")
+    await asyncio.sleep(2)  # รอให้ print เสร็จก่อน
+    os.execv(sys.executable, ['python'] + sys.argv)
 
 @bot.event
 async def on_ready():
@@ -209,6 +214,7 @@ async def on_ready():
         await clean_old_calendar_messages()
         await send_monthly_calendar()
         check_calendar.start()
+        restart_bot_every_24h.start()
     except Exception as e:
         print(f"[ERROR-on_ready] {e}")
 
