@@ -212,10 +212,11 @@ async def on_ready():
     except Exception as e:
         print(f"[ERROR-on_ready] {e}")
 
-@tasks.loop(hours=24)
+@tasks.loop(count=1)
 async def restart_bot_every_24h():
-    print("🔁 รีสตาร์ทบอทเพื่อความเสถียร")
-    await asyncio.sleep(2)  # รอให้ print เสร็จก่อน
+    await asyncio.sleep(86400)  # รอ 24 ชั่วโมง = 86400 วินาที
+    print("🔁 รีสตาร์ทบอทเพื่อความเสถียร (ครบ 24 ชั่วโมง)")
+    await bot.close()
     os.execv(sys.executable, ['python'] + sys.argv)
 
 
@@ -564,6 +565,7 @@ keep_alive()  # ✅ เรียกก่อน เพื่อให้ web ser
 
 async def main():
     async with bot:
+        await asyncio.sleep(10)
         await bot.start(TOKEN)
 
 if __name__ == "__main__":
