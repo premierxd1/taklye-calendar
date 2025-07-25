@@ -20,7 +20,11 @@ intents.members = True
 intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-ROLE_ID = int(os.getenv("DISCORD_ROLE_ID"))
+role_id_env = os.getenv("DISCORD_ROLE_ID")
+if not role_id_env:
+    raise ValueError("❌ กรุณาตั้งค่าตัวแปร DISCORD_ROLE_ID ใน Railway")
+ROLE_ID = int(role_id_env)
+
 CALENDAR_ID = os.getenv("CALENDAR_ID")
 channel_ids = json.loads(os.getenv("CHANNEL_IDS", "[]"))
 
