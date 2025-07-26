@@ -13,7 +13,6 @@ from dateutil.parser import isoparse
 from aiohttp import web
 import threading
 import unicodedata
-import base64
 
 
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -24,16 +23,8 @@ ROLE_ID = 1361252742521290866
 VOICE_ID_FILE = "voice_id.json"
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
-
-creds_b64 = os.getenv("GOOGLE_CREDS_B64")
-if not creds_b64:
-    raise ValueError("❌ Environment variable 'GOOGLE_CREDS_B64' not found.")
-try:
-    creds_json = base64.b64decode(creds_b64).decode('utf-8')
-    creds_dict = json.loads(creds_json)
-except Exception as e:
-    raise ValueError(f"❌ Failed to decode GOOGLE_CREDS_B64: {e}")
-
+creds_json = os.getenv("GOOGLE_CREDS")
+creds_dict = json.loads(creds_json)
 creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 
 calendar_service = build('calendar', 'v3', credentials=creds)
@@ -67,12 +58,24 @@ def load_notified():
             return set()
     return set()
 
-
 already_notified = load_notified()
 
 def save_notified(data):
     with open(NOTIFIED_FILE, "w") as f:
         json.dump(list(data), f)
+
+def load_checked_in():
+    try:
+        with open("checked_in.json", "r") as f:
+            return set(json.load(f))
+    except:
+        return set()
+
+def save_checked_in(data):
+    with open("checked_in.json", "w") as f:
+        json.dump(list(data), f)
+
+already_checked_in = load_checked_in()
 
 def get_upcoming_events():
     now = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
@@ -302,7 +305,10 @@ async def check_calendar():
                         except Exception as e:
                             print(f"[ERROR-ส่งข้อความ] {e}")
 
-        if not is_all_day and timedelta(seconds=-60) < delta < timedelta(seconds=60):
+        checkin_key = f"{event_id}|checkin"
+        if not is_all_day and checkin_key not in already_notified and timedelta(seconds=-60) < delta < timedelta(seconds=60):
+            already_notified.add(checkin_key)
+            save_notified(already_notified)
             for cid in channel_ids:
                 channel = bot.get_channel(cid)
                 if channel:
