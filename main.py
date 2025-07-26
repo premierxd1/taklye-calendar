@@ -13,6 +13,7 @@ from dateutil.parser import isoparse
 from aiohttp import web
 import threading
 import unicodedata
+import base64
 
 
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -23,8 +24,16 @@ ROLE_ID = 1361252742521290866
 VOICE_ID_FILE = "voice_id.json"
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
-creds_json = os.getenv("GOOGLE_CREDS")
-creds_dict = json.loads(creds_json)
+
+creds_b64 = os.getenv("GOOGLE_CREDS_B64")
+if not creds_b64:
+    raise ValueError("❌ Environment variable 'GOOGLE_CREDS_B64' not found.")
+try:
+    creds_json = base64.b64decode(creds_b64).decode('utf-8')
+    creds_dict = json.loads(creds_json)
+except Exception as e:
+    raise ValueError(f"❌ Failed to decode GOOGLE_CREDS_B64: {e}")
+
 creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 
 calendar_service = build('calendar', 'v3', credentials=creds)
@@ -223,7 +232,7 @@ async def restart_bot_every_24h():
     await asyncio.sleep(86400)  # รอ 24 ชั่วโมง = 86400 วินาที
     print("🔁 รีสตาร์ทบอทเพื่อความเสถียร (ครบ 24 ชั่วโมง)")
     await bot.close()
-    os.execv(sys.executable, ['python'] + sys.argv)
+    sys.exit(0)
 
 
 @tasks.loop(seconds=30)
