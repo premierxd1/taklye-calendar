@@ -217,16 +217,28 @@ async def send_monthly_calendar():
             if channel:
                 await channel.send(calendar_text)
 
+start_time = asyncio.get_event_loop().time()
+
+async def background_restart_check():
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        now = asyncio.get_event_loop().time()
+        uptime = now - start_time
+        if uptime >= 86400:  # 24 ชั่วโมง
+            print("\U0001F501 รีสตาร์ทบอทเพื่อความเสถียร (ครบ 24 ชั่วโมง)")
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        await asyncio.sleep(60)
+
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
-    print("📡 Bot is now online.")
+    print(f"\u2705 Logged in as {bot.user} (ID: {bot.user.id})")
+    print("\U0001F4E1 Bot is now online.")
 
     try:
         await clean_old_calendar_messages()
         await send_monthly_calendar()
         check_calendar.start()
-        restart_bot_every_24h.start()
+        bot.loop.create_task(background_restart_check())  # ⬆️ เพิ่มบรรทัดนี้
     except Exception as e:
         print(f"[ERROR-on_ready] {e}")
 
